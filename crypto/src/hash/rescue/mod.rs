@@ -11,6 +11,9 @@ pub use rp62_248::Rp62_248;
 mod rp64_256;
 pub use rp64_256::Rp64_256;
 
+mod poseidon;
+pub use poseidon::Poseidon64;
+
 // HELPER FUNCTIONS
 // ================================================================================================
 

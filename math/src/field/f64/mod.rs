@@ -16,8 +16,10 @@
 
 use super::{ExtensibleField, FieldElement, StarkField};
 use core::{
+    arch::asm,
     convert::{TryFrom, TryInto},
     fmt::{Debug, Display, Formatter},
+    hint::unreachable_unchecked,
     mem,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     slice,
@@ -59,6 +61,47 @@ impl BaseElement {
     /// equal to the field modulus, modular reduction is silently performed.
     pub const fn new(value: u64) -> Self {
         Self(value % M)
+    }
+
+    /// Computes an exponentiation to the power 7. This is useful for computing Rescue-Prime
+    /// S-Box over this field.
+    #[inline(always)]
+    pub fn exp7(self) -> Self {
+        let x2 = self.square();
+        let x4 = x2.square();
+        let x3 = x2 * self;
+        x3 * x4
+    }
+
+    #[inline]
+    pub fn from_noncanonical_u128(n: u128) -> BaseElement {
+        reduce128(n)
+    }
+
+    #[inline]
+    pub fn from_noncanonical_u96((n_lo, n_hi): (u64, u32)) -> BaseElement {
+        // Default implementation.
+        let n: u128 = ((n_hi as u128) << 64) + (n_lo as u128);
+        Self::from_noncanonical_u128(n)
+    }
+    #[inline(always)]
+    pub fn to_noncanonical_u64(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    pub unsafe fn add_canonical_u64(&self, rhs: u64) -> Self {
+        // Default implementation.
+        *self + Self::from_canonical_u64(rhs)
+    }
+
+    #[inline]
+    pub fn from_noncanonical_u64(n: u64) -> Self {
+        Self(n)
+    }
+    #[inline(always)]
+    pub const fn from_canonical_u64(n: u64) -> Self {
+        //assert!(n < Self::MODULUS);
+        Self(n)
     }
 }
 
@@ -571,4 +614,74 @@ fn exp_acc<const N: usize>(base: BaseElement, tail: BaseElement) -> BaseElement 
         result = result.square();
     }
     result * tail
+}
+
+// From Polygon Zero's Plonky2 repo
+// ================================================================================================
+
+#[inline(always)]
+pub fn assume(p: bool) {
+    debug_assert!(p);
+    if !p {
+        unsafe {
+            unreachable_unchecked();
+        }
+    }
+}
+
+#[inline(always)]
+pub fn branch_hint() {
+    unsafe {
+        asm!("", options(nomem, nostack, preserves_flags));
+    }
+}
+
+#[inline(always)]
+#[cfg(target_arch = "x86_64")]
+unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
+    let (res_wrapped, carry) = x.overflowing_add(y);
+    // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
+    res_wrapped + EPSILON * (carry as u64)
+}
+
+#[inline(always)]
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
+    let (res_wrapped, carry) = x.overflowing_add(y);
+    // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
+    res_wrapped + EPSILON * (carry as u64)
+}
+
+const EPSILON: u64 = (1 << 32) - 1;
+
+/// Reduces to a 64-bit value. The result might not be in canonical form; it could be in between the
+/// field order and `2^64`.
+#[inline]
+fn reduce128(x: u128) -> BaseElement {
+    let (x_lo, x_hi) = split(x); // This is a no-op
+    let x_hi_hi = x_hi >> 32;
+    let x_hi_lo = x_hi & EPSILON;
+
+    let (mut t0, borrow) = x_lo.overflowing_sub(x_hi_hi);
+    if borrow {
+        branch_hint(); // A borrow is exceedingly rare. It is faster to branch.
+        t0 -= EPSILON; // Cannot underflow.
+    }
+    let t1 = x_hi_lo * EPSILON;
+    let t2 = unsafe { add_no_canonicalize_trashing_input(t0, t1) };
+    BaseElement(t2)
+}
+
+#[inline]
+fn split(x: u128) -> (u64, u64) {
+    (x as u64, (x >> 64) as u64)
+}
+
+#[inline(always)]
+pub fn reduce_u160((n_lo, n_hi): (u128, u32)) -> BaseElement {
+    let n_lo_hi = (n_lo >> 64) as u64;
+    let n_lo_lo = n_lo as u64;
+    let reduced_hi: u64 = BaseElement::from_noncanonical_u96((n_lo_hi, n_hi)).to_noncanonical_u64();
+    let reduced128: u128 = ((reduced_hi as u128) << 64) + (n_lo_lo as u128);
+    BaseElement::from_noncanonical_u128(reduced128)
 }
