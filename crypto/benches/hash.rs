@@ -3,18 +3,69 @@
 // This source code is licensed under the MIT license found in the
 // LICENSE file in the root directory of this source tree.
 
+use blake3::Hash;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 use math::fields::f64::{self, BaseElement};
 use rand_utils::rand_value;
 use winter_crypto::{
-    hashers::{Poseidon64, Rp64_256, Sha3_256},
+    hashers::{Poseidon64, Rp64_256, Sha3_256, Blake3_256},
     ElementHasher, Hasher,
 };
 
 type Sha3 = Sha3_256<f64::BaseElement>;
+type Blake3 = Blake3_256<f64::BaseElement>;
+type Blake3Digest = <Blake3 as Hasher>::Digest;
 type Sha3Digest = <Sha3 as Hasher>::Digest;
 type Rp64_256Digest = <Rp64_256 as Hasher>::Digest;
 type PoseidonDigest = <Poseidon64 as Hasher>::Digest;
+
+fn blake3_2to1(c: &mut Criterion) {
+    let v: [Blake3Digest; 2] = [Blake3::hash(&[1u8]), Blake3::hash(&[2u8])];
+    c.bench_function("Blake3 2-to-1 hashing (cached)", |bench| {
+        bench.iter(|| Blake3::merge(black_box(&v)))
+    });
+
+    c.bench_function("Blake3 2-to-1 hashing (random)", |b| {
+        b.iter_batched(
+            || {
+                [
+                    Blake3::hash(&rand_value::<u64>().to_le_bytes()),
+                    Blake3::hash(&rand_value::<u64>().to_le_bytes()),
+                ]
+            },
+            |state| Blake3::merge(&state),
+            BatchSize::SmallInput,
+        )
+    });
+}
+
+fn blake3_sequential(c: &mut Criterion) {
+    let v: [BaseElement; 100] = (0..100)
+        .into_iter()
+        .map(BaseElement::new)
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("should not fail");
+    c.bench_function("Blake3 sequential hashing (cached)", |bench| {
+        bench.iter(|| Blake3::hash_elements(black_box(&v)))
+    });
+
+    c.bench_function("Blake3 sequential hashing (random)", |bench| {
+        bench.iter_batched(
+            || {
+                let v: [BaseElement; 100] = (0..100)
+                    .into_iter()
+                    .map(|_| BaseElement::new(rand_value()))
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .expect("should not fail");
+                v
+            },
+            |state| Blake3::hash_elements(&state),
+            BatchSize::SmallInput,
+        )
+    });
+}
 
 fn sha3_2to1(c: &mut Criterion) {
     let v: [Sha3Digest; 2] = [Sha3::hash(&[1u8]), Sha3::hash(&[2u8])];
@@ -162,6 +213,8 @@ fn poseidon_sequential(c: &mut Criterion) {
 
 criterion_group!(
     hash_group,
+    blake3_2to1,
+    blake3_sequential,
     sha3_2to1,
     sha3_sequential,
     rescue256_2to1,
