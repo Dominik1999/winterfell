@@ -16,10 +16,8 @@
 
 use super::{ExtensibleField, FieldElement, StarkField};
 use core::{
-    arch::asm,
     convert::{TryFrom, TryInto},
     fmt::{Debug, Display, Formatter},
-    hint::unreachable_unchecked,
     mem,
     ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     slice,
@@ -620,32 +618,6 @@ fn exp_acc<const N: usize>(base: BaseElement, tail: BaseElement) -> BaseElement 
 // ================================================================================================
 
 #[inline(always)]
-pub fn assume(p: bool) {
-    debug_assert!(p);
-    if !p {
-        unsafe {
-            unreachable_unchecked();
-        }
-    }
-}
-
-#[inline(always)]
-pub fn branch_hint() {
-    unsafe {
-        asm!("", options(nomem, nostack, preserves_flags));
-    }
-}
-
-#[inline(always)]
-#[cfg(target_arch = "x86_64")]
-unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
-    let (res_wrapped, carry) = x.overflowing_add(y);
-    // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
-    res_wrapped + EPSILON * (carry as u64)
-}
-
-#[inline(always)]
-#[cfg(not(target_arch = "x86_64"))]
 unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
     let (res_wrapped, carry) = x.overflowing_add(y);
     // Below cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
@@ -664,7 +636,6 @@ fn reduce128(x: u128) -> BaseElement {
 
     let (mut t0, borrow) = x_lo.overflowing_sub(x_hi_hi);
     if borrow {
-        branch_hint(); // A borrow is exceedingly rare. It is faster to branch.
         t0 -= EPSILON; // Cannot underflow.
     }
     let t1 = x_hi_lo * EPSILON;
